@@ -16,8 +16,9 @@ model requires a kernel combination that was not included in the build.
 6. [Bool Combinations](#bool-combinations)
 7. [Custom Configuration](#custom-configuration)
 8. [Build & Install](#build--install)
-9. [Troubleshooting](#troubleshooting)
-10. [Performance Notes](#performance-notes)
+9. [Low-Memory Builds](#low-memory-builds)
+10. [Troubleshooting](#troubleshooting)
+11. [Performance Notes](#performance-notes)
 
 ---
 
@@ -213,7 +214,7 @@ It is used for distributed attention merging (chunked prefill states).
 
 ### Step 1: Identify Your Requirements
 
-```python
+```text
 # Pseudo-code
 head_size = model.hidden_size // model.num_heads
 causal    = True                          # most language models
@@ -316,6 +317,133 @@ cmake -DVLLM_CHUNK_PREFILL_CONFIG=/path/to/custom_prefill.conf \
       -DVLLM_PAGED_DECODE_CONFIG=/path/to/custom_decode.conf \
       ...
 ```
+
+---
+
+## Low-Memory Builds
+
+SYCL/TLA kernel compilation can consume substantial RAM, especially with the
+full attention presets. If a build is OOM-killed or requires more system memory
+than expected, reduce both the kernel matrix and build parallelism.
+
+### 1. Limit compile parallelism
+
+`setup.py` honors `MAX_JOBS`. If unset, it auto-selects parallelism from CPU
+count and total memory. For memory-constrained machines, start serially:
+
+```bash
+MAX_JOBS=1 \
+CMAKE_BUILD_PARALLEL_LEVEL=1 \
+MAKEFLAGS=-j1 \
+  pip install --no-build-isolation -e . -v
+```
+
+`MAX_JOBS` is the primary knob used by `setup.py`; `CMAKE_BUILD_PARALLEL_LEVEL`
+and `MAKEFLAGS` are extra safeguards for CMake or Make-backed paths. Only
+increase to `MAX_JOBS=2` after a serial build succeeds reliably.
+
+### 2. Limit SYCL device-link parallelism
+
+SYCL device linking also supports a separate parallelism limit. The default is
+`16`, matching the historical build flag. On memory-constrained machines, set it
+lower:
+
+```bash
+MAX_JOBS=1 \
+CMAKE_BUILD_PARALLEL_LEVEL=1 \
+MAKEFLAGS=-j1 \
+VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS=1 \
+  pip install --no-build-isolation -e . -v
+```
+
+### 3. Use default or custom attention configs instead of full configs
+
+A plain build defaults to broad kernel coverage. For lower memory, explicitly
+select a smaller preset or a model-specific custom config:
+
+```bash
+MAX_JOBS=1 \
+VLLM_CHUNK_PREFILL_CONFIG=chunk_prefill_default.conf \
+VLLM_PAGED_DECODE_CONFIG=paged_decode_default.conf \
+  pip install --no-build-isolation -e . -v
+```
+
+For models not covered by the default presets, add only the missing lines shown
+by the runtime missing-kernel error rather than switching directly to `full`.
+
+### 4. Disable kernel categories that are not needed
+
+The build supports category toggles. Set a toggle to `OFF`, `0`, `FALSE`, or
+`NO` to disable it:
+
+```bash
+MAX_JOBS=1 \
+FA2_KERNELS_ENABLED=OFF \
+GDN_KERNELS_ENABLED=OFF \
+MQA_LOGITS_KERNELS_ENABLED=OFF \
+  pip install --no-build-isolation -e . -v
+```
+
+Useful examples:
+
+- If serving only through `TRITON_ATTN`, `FA2_KERNELS_ENABLED=OFF` can avoid the
+  FlashAttention TLA kernel library.
+- If testing models without GDN/linear attention, `GDN_KERNELS_ENABLED=OFF` can
+  avoid the GDN attention TLA library.
+- If MQA logits kernels are not needed, `MQA_LOGITS_KERNELS_ENABLED=OFF` avoids
+  that extra library.
+
+### 5. Restrict AOT device targets when appropriate
+
+By default, XPU builds may target multiple Intel GPU architectures. For a
+machine-specific build, the AOT device list can be restricted:
+
+```bash
+MAX_JOBS=1 \
+VLLM_XPU_AOT_DEVICES=bmg-g21-a0 \
+VLLM_XPU_XE2_AOT_DEVICES=bmg-g21-a0 \
+  pip install --no-build-isolation -e . -v
+```
+
+Use only device names that match the target deployment hardware; otherwise the
+resulting binaries may not run on other systems.
+
+### 6. Disable unused architecture families
+
+For a BMG/XE2-only build, disabling the extra XE-default architecture can reduce
+grouped-GEMM build work:
+
+```bash
+MAX_JOBS=1 \
+VLLM_XPU_ENABLE_XE_DEFAULT=OFF \
+  pip install --no-build-isolation -e . -v
+```
+
+Keep this enabled for wheels intended to run across multiple XPU generations.
+
+### 7. Build a wheel artifact
+
+To produce a reusable wheel instead of installing directly, use `uv build` with
+`--wheel` or `pip wheel` with the same low-memory environment variables:
+
+```bash
+MAX_JOBS=1 \
+CMAKE_BUILD_PARALLEL_LEVEL=1 \
+MAKEFLAGS=-j1 \
+VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS=1 \
+  uv build --no-build-isolation --wheel -v
+```
+
+```bash
+MAX_JOBS=1 \
+CMAKE_BUILD_PARALLEL_LEVEL=1 \
+MAKEFLAGS=-j1 \
+VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS=1 \
+  pip wheel --no-build-isolation . -v
+```
+
+Install the resulting `.whl` in a target environment with matching Python,
+PyTorch XPU, oneAPI/runtime, and Linux ABI compatibility.
 
 ---
 

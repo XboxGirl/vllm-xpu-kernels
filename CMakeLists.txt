@@ -264,9 +264,24 @@ if(VLLM_GPU_LANG STREQUAL "SYCL")
   # ============= LINK OPTIONS ==================
   set(SYCL_LINK_FLAGS "")
   list(APPEND SYCL_LINK_FLAGS "-fsycl")
+  set(VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS
+      "16"
+      CACHE STRING "Maximum parallel jobs used by the SYCL device linker")
+  if(DEFINED ENV{VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS})
+    set(VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS
+        "$ENV{VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS}")
+  endif()
+  if(NOT VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS MATCHES "^[1-9][0-9]*$")
+    message(
+      FATAL_ERROR
+        "VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS must be a positive integer, got '${VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS}'"
+    )
+  endif()
+  message(STATUS "SYCL max parallel link jobs: ${VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS}")
   set(SYCL_DEVICE_LINK_FLAGS ${SYCL_LINK_FLAGS})
   set(SYCL_DEVICE_LINK_FLAGS
-      ${SYCL_DEVICE_LINK_FLAGS} -fsycl-max-parallel-link-jobs=16
+      ${SYCL_DEVICE_LINK_FLAGS}
+      -fsycl-max-parallel-link-jobs=${VLLM_XPU_SYCL_MAX_PARALLEL_LINK_JOBS}
       -flink-huge-device-code)
   set(SYCL_DEVICE_LINK_FLAGS
       ${SYCL_DEVICE_LINK_FLAGS}
