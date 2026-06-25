@@ -339,6 +339,11 @@ CUTE_DEVICE void xe_gemm_4bits(
   int group_num = get<1>(A.shape()) / group_size;
   int x_idx = sg_local_id / channel_num;
 
+  // Xe2 block_2d prefetch requires row pitch >= 64B and 16B alignment.
+  const bool can_prefetch_scales =
+      group_num * static_cast<int>(sizeof(ElementS)) >= 64 &&
+      (group_num * static_cast<int>(sizeof(ElementS))) % 16 == 0;
+
   using scaleStoreType = conditional_t<is_same_v<TA, half_t>, half_t, float>;
   scaleStoreType scales[thr_N * channel_num];
 
@@ -354,7 +359,8 @@ CUTE_DEVICE void xe_gemm_4bits(
     prefetch(prefetch_a, pAgA(_, _, _, k_tile_prefetch));
     prefetch(prefetch_b, pBgB(_, _, _, k_tile_prefetch));
 
-    if (k_tile_prefetch * group_size < shape<1>(A)) {
+    if (can_prefetch_scales &&
+        k_tile_prefetch * group_size < shape<1>(A)) {
       auto next_scales_tensor = make_tensor(
           make_gmem_ptr(
               reinterpret_cast<const ElementS*>(
@@ -406,7 +412,8 @@ CUTE_DEVICE void xe_gemm_4bits(
         }
       }
 
-      if ((group_idx + prefetch_dist) * group_size < shape<1>(A)) {
+      if (can_prefetch_scales &&
+          (group_idx + prefetch_dist) * group_size < shape<1>(A)) {
         auto next_scales_tensor = make_tensor(
             make_gmem_ptr(
                 reinterpret_cast<const ElementS*>(
